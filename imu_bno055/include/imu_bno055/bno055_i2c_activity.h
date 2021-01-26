@@ -249,11 +249,14 @@ class BNO055I2CActivity {
     uint32_t seq = 0;
     int file;
     diagnostic_msgs::DiagnosticStatus current_status;
+    sensor_msgs::Imu old_msg_data;
 
     // ROS parameters
     std::string param_frame_id;
     std::string param_device;
     int param_address;
+    double fused_max_angular_velocity;
+    double fused_max_q_orientation_change;
 
     // ROS node handles
     ros::NodeHandle nh;

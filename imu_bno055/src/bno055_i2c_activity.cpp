@@ -18,6 +18,17 @@ BNO055I2CActivity::BNO055I2CActivity(ros::NodeHandle &_nh, ros::NodeHandle &_nh_
     nh_priv.param("address", param_address, (int)BNO055_ADDRESS_A);
     nh_priv.param("frame_id", param_frame_id, (std::string)"imu");
 
+    nh_priv.param("imu_filter/fused_max_angular_velocity", fused_max_angular_velocity, 10.0);
+    nh_priv.param("imu_filter/fused_max_q_orientation_change", fused_max_q_orientation_change, 10.0);
+
+    // these seem like low values, just warn about them
+    if(fused_max_angular_velocity<0.2){
+        ROS_WARN("Low pass filter param for max angular velocity seems pretty low: %lf", fused_max_angular_velocity);
+    }
+    if(fused_max_q_orientation_change<0.1){
+        ROS_WARN("Low pass filter param for max quanternion orientation change seems pretty low: %lf", fused_max_q_orientation_change);
+    }
+
     current_status.level = 0;
     current_status.name = "BNO055 IMU";
     current_status.hardware_id = "bno055_i2c";
@@ -199,6 +210,29 @@ bool BNO055I2CActivity::spinOnce() {
     msg_data.angular_velocity.y = (double)record.raw_angular_velocity_y / 900.0;
     msg_data.angular_velocity.z = (double)record.raw_angular_velocity_z / 900.0;
 
+    // covariance will be multiplied with this factor
+    float covarance_multiplication_factor = 1;
+
+    if( fabs(msg_data.angular_velocity.x)>fused_max_angular_velocity || 
+        fabs(msg_data.angular_velocity.y)>fused_max_angular_velocity || 
+        fabs(msg_data.angular_velocity.z)>fused_max_angular_velocity){
+        ROS_WARN("IMU low pass filter: Angular velocity x,y,z (%lf, %lf, %lf) overreached upper limit: %lf",
+                                                            msg_data.angular_velocity.x,
+                                                            msg_data.angular_velocity.y,
+                                                            msg_data.angular_velocity.z,
+                                                            fused_max_angular_velocity);
+        covarance_multiplication_factor = 20;
+
+    }
+
+    float max_fused_orientation_change = 0.5;
+    if( fabs(msg_data.orientation.x-old_msg_data.orientation.x)>fused_max_q_orientation_change ||
+        fabs(msg_data.orientation.y-old_msg_data.orientation.y)>fused_max_q_orientation_change ||
+        fabs(msg_data.orientation.z-old_msg_data.orientation.z)>fused_max_q_orientation_change){
+        ROS_WARN("IMU low pass filter: Angular change x,y,z overreached upper limit: %lf", fused_max_q_orientation_change);
+        covarance_multiplication_factor = 20;
+    }
+
     // Source: https://github.com/Vijfendertig/rosserial_adafruit_bno055/blob/532b63db9b0e5e5e9217bd89905001fe979df3a4/src/imu_publisher/imu_publisher.cpp#L42.
     // The Bosch BNO055 datasheet is pretty useless regarding the sensor's accuracy.
     // - The accuracy of the magnetometer is +-2.5deg. Users on online forums agree on that number.
@@ -208,9 +242,9 @@ bool BNO055I2CActivity::spinOnce() {
     // Cross-axis errors are not (yet) taken into account. To be tested.
     for(unsigned row = 0; row < 3; ++ row) {
       for(unsigned col = 0; col < 3; ++ col) {
-        msg_data.orientation_covariance[row * 3 + col] = (row == col? 0.002: 0.);  // +-2.5deg
-        msg_data.angular_velocity_covariance[row * 3 + col] = (row == col? 0.003: 0.);  // +-3deg/s
-        msg_data.linear_acceleration_covariance[row * 3 + col] = (row == col? 0.60: 0.);  // +-80mg
+        msg_data.orientation_covariance[row * 3 + col] = (row == col? 0.002: 0.)*covarance_multiplication_factor;  // +-2.5deg
+        msg_data.angular_velocity_covariance[row * 3 + col] = (row == col? 0.003: 0.)*covarance_multiplication_factor;  // +-3deg/s
+        msg_data.linear_acceleration_covariance[row * 3 + col] = (row == col? 0.60: 0.)*covarance_multiplication_factor;  // +-80mg
       }
     }
 
@@ -234,6 +268,8 @@ bool BNO055I2CActivity::spinOnce() {
         current_status.values[DIAG_SYS_ERR].value = std::to_string(record.system_error_code);
         pub_status.publish(current_status);
     }
+
+    old_msg_data = msg_data;
 
     return true;    
 }
